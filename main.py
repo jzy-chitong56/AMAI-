@@ -1,89 +1,146 @@
 import sys
 import os
 import subprocess
-import shutil
 from pathlib import Path
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGroupBox, QComboBox, 
-                            QLabel, QPushButton, QFileDialog, QRadioButton, QButtonGroup,
-                            QLineEdit, QProgressBar, QTextEdit, QHBoxLayout, QMessageBox)
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                            QLabel, QPushButton, QFileDialog, QRadioButton, 
+                            QLineEdit, QProgressBar, QTextEdit, QHBoxLayout, 
+                            QMessageBox, QComboBox)
 from PyQt5.QtCore import QThread, pyqtSignal
 
 class CommandWorker(QThread):
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(bool, str)
+    log_message = pyqtSignal(str)
 
-    def __init__(self, params):
+    def __init__(self, params, script_dir):
         super().__init__()
         self.params = params
+        self.script_dir = script_dir
 
     def run(self):
         try:
-            # 实现Git工作流
-            repo_path = Path(".amai_temp")
-            if repo_path.exists():
-                shutil.rmtree(repo_path)
-            
-            self.progress.emit(10, "Cloning AI repository...")
-            subprocess.run(["git", "clone", "https://github.com/amai-repository", ".amai_temp"], check=True)
-            
-            self.progress.emit(30, "Preparing files...")
-            os.chdir(".amai_temp")
-            
-            # 根据用户选择执行操作
             mode = self.params["mode"]
+            process_method = self.params["process_method"]
+            path = self.params["path"]
+            
             if mode in ["install", "install_vs"]:
+                # 安装模式
                 version = self.params["version"]
-                console = "vs" if mode == "install_vs" else "regular"
+                console_type = "2" if mode == "install_vs" else ("0" if mode == "install_noconsole" else "1")
                 
-                if self.params["process_method"] == "batch":
-                    self.progress.emit(40, "Processing batch folder...")
-                    for map_file in self.find_maps(self.params["path"]):
-                        self.process_map(map_file, version, console)
-                else:
-                    self.progress.emit(40, "Processing single map...")
-                    self.process_map(self.params["path"], version, console)
+                if process_method == "batch":
+                    self.log_message.emit("开始批量处理地图文件夹...")
+                    self.progress.emit(20, "扫描地图文件")
+                    
+                    # 找到所有地图文件
+                    map_files = self.find_maps(path)
+                    total = len(map_files)
+                    
+                    if not map_files:
+                        raise ValueError("在指定文件夹中找不到地图文件")
+                        
+                    for i, map_file in enumerate(map_files):
+                        progress = 20 + int(70 * i / total)
+                        self.progress.emit(progress, f"处理地图: {map_file.name}")
+                        self.execute_bat("install.bat", version, console_type, str(map_file))
+                
+                else:  # 单个地图处理
+                    self.progress.emit(20, "处理单个地图文件")
+                    self.execute_bat("install.bat", version, console_type, path)
             
             elif mode == "uninstall_console":
-                # 控制台卸载逻辑
-                pass
-                
-            elif mode == "uninstall_all":
-                # 完全卸载逻辑
-                pass
-                
-            self.progress.emit(90, "Cleaning up...")
-            os.chdir("..")
-            shutil.rmtree(repo_path)
+                # 卸载控制台
+                if process_method == "batch":
+                    map_files = self.find_maps(path)
+                    total = len(map_files)
+                    
+                    for i, map_file in enumerate(map_files):
+                        progress = int(100 * i / total)
+                        self.progress.emit(progress, f"从 {map_file.name} 移除控制台")
+                        self.execute_bat("uninstall_console.bat", str(map_file))
+                else:
+                    self.progress.emit(50, "从单个地图移除控制台")
+                    self.execute_bat("uninstall_console.bat", path)
             
-            self.finished.emit(True, "Operation completed successfully!")
+            elif mode == "uninstall_all":
+                # 完全卸载
+                if process_method == "batch":
+                    map_files = self.find_maps(path)
+                    total = len(map_files)
+                    
+                    for i, map_file in enumerate(map_files):
+                        progress = int(100 * i / total)
+                        self.progress.emit(progress, f"从 {map_file.name} 完全卸载AMAI")
+                        self.execute_bat("uninstall_all.bat", str(map_file))
+                else:
+                    self.progress.emit(50, "从单个地图完全卸载AMAI")
+                    self.execute_bat("uninstall_all.bat", path)
+            
+            self.progress.emit(100, "操作完成")
+            self.finished.emit(True, "操作成功完成!")
             
         except Exception as e:
-            self.finished.emit(False, f"Error: {str(e)}")
+            self.finished.emit(False, f"错误: {str(e)}")
 
     def find_maps(self, folder):
+        """在指定文件夹中查找所有地图文件"""
         maps = []
-        for ext in ["*.w3x", "*.w3m"]:
+        for ext in ("*.w3x", "*.w3m"):
             maps.extend(Path(folder).glob(ext))
         return maps
 
-    def process_map(self, map_path, version, console):
-        map_path = Path(map_path)
-        self.progress.emit(50, f"Processing {map_path.name}...")
-        # 这里添加实际的地图处理逻辑
-        # 例如: subprocess.run(["./install_script", version, console, str(map_path)])
-        pass
+    def execute_bat(self, bat_name, *args):
+        """执行外部批处理脚本"""
+        bat_path = os.path.join(self.script_dir, bat_name)
+        
+        if not os.path.exists(bat_path):
+            raise FileNotFoundError(f"脚本文件不存在: {bat_path}")
+        
+        command = [bat_path]
+        command.extend(args)
+        
+        self.log_message.emit(f"执行命令: {' '.join(command)}")
+        
+        try:
+            # 执行批处理脚本
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            
+            # 记录输出
+            if result.stdout:
+                self.log_message.emit(result.stdout)
+            if result.stderr:
+                self.log_message.emit(f"错误: {result.stderr}")
+                
+            # 检查返回码
+            if result.returncode != 0:
+                raise RuntimeError(f"脚本执行失败, 返回码: {result.returncode}")
+                
+        except Exception as e:
+            raise RuntimeError(f"执行脚本失败: {str(e)}")
 
 class AMAIInstaller(QMainWindow):
-    def __init__(self):
+    def __init__(self, script_dir):
         super().__init__()
-        self.setWindowTitle("AMAI Installation Tool")
-        self.setGeometry(100, 100, 800, 600)
+        self.setWindowTitle("AMAI 安装工具")
+        self.setGeometry(100, 100, 600, 500)
+        
+        # 设置窗口图标
+        self.setWindowIcon(self.style().standardIcon(self.style().SP_ComputerIcon))
         
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         
         self.main_layout = QVBoxLayout(self.central_widget)
+        self.main_layout.setContentsMargins(10, 10, 10, 10)
         
+        self.script_dir = script_dir
         self.setup_ui()
         self.params = {
             "mode": "install",
@@ -91,160 +148,138 @@ class AMAIInstaller(QMainWindow):
             "version": "REFORGED",
             "path": ""
         }
-        
-        self.check_git()
-
-    def check_git(self):
-        try:
-            subprocess.run(["git", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            QMessageBox.critical(self, "Git Not Found", 
-                                 "Git is required for this application but was not found. "
-                                 "Please install Git and restart the application.")
-            self.close()
 
     def setup_ui(self):
-        # Mode Selection
-        mode_group = QGroupBox("Installation Mode")
-        mode_layout = QVBoxLayout()
+        # 创建表单布局
+        form_layout = QVBoxLayout()
         
+        # 操作模式
+        form_layout.addWidget(QLabel("操作模式:"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItems([
-            "Install AMAI (Standard Console)",
-            "Install AMAI (VS Blizzard AI Console)",
-            "Install AMAI (No Console)",
-            "Remove AMAI Console",
-            "Uninstall AMAI and Console"
+            "安装 AMAI (标准控制台)",
+            "安装 AMAI (对战暴雪AI控制台)",
+            "安装 AMAI (不安装控制台)",
+            "移除 AMAI 控制台",
+            "完全卸载 AMAI"
         ])
         self.mode_combo.currentIndexChanged.connect(self.update_mode)
-        mode_layout.addWidget(QLabel("Select Operation Mode:"))
-        mode_layout.addWidget(self.mode_combo)
-        mode_group.setLayout(mode_layout)
+        form_layout.addWidget(self.mode_combo)
         
-        # Process Method
-        method_group = QGroupBox("Processing Method")
-        method_layout = QVBoxLayout()
+        # 处理方式
+        form_layout.addWidget(QLabel("处理方式:"))
         
-        self.batch_radio = QRadioButton("Process Maps in Batch (Whole Folder)")
-        self.single_radio = QRadioButton("Process Single Map")
+        method_layout = QHBoxLayout()
+        self.batch_radio = QRadioButton("批量处理 (文件夹)")
+        self.single_radio = QRadioButton("单个地图")
         self.batch_radio.setChecked(True)
-        
-        self.method_group = QButtonGroup()
-        self.method_group.addButton(self.batch_radio, 0)
-        self.method_group.addButton(self.single_radio, 1)
-        
         method_layout.addWidget(self.batch_radio)
         method_layout.addWidget(self.single_radio)
-        method_group.setLayout(method_layout)
+        form_layout.addLayout(method_layout)
         
-        # Version Selection
-        self.version_group = QGroupBox("Warcraft III Version")
-        version_layout = QVBoxLayout()
-        
+        # 魔兽版本 (只在安装模式下显示)
+        self.version_layout = QVBoxLayout()
+        self.version_layout.addWidget(QLabel("魔兽版本:"))
         self.version_combo = QComboBox()
         self.version_combo.addItems([
-            "Reforged Edition (1.33+)",
-            "Classic: The Frozen Throne (1.24e+)",
-            "Classic: Reign of Chaos (1.24e-1.31)"
+            "重制版 (1.33+)",
+            "经典版: 冰封王座 (1.24e+)",
+            "经典版: 混乱之治 (1.24e-1.31)"
         ])
-        version_layout.addWidget(QLabel("Select Warcraft III Version:"))
-        version_layout.addWidget(self.version_combo)
-        self.version_group.setLayout(version_layout)
+        self.version_layout.addWidget(self.version_combo)
+        form_layout.addLayout(self.version_layout)
         
-        # Path Selection
-        path_group = QGroupBox("Map Location")
-        path_layout = QVBoxLayout()
+        # 路径选择
+        form_layout.addWidget(QLabel("地图位置:"))
         
-        self.path_layout = QHBoxLayout()
+        path_layout = QHBoxLayout()
         self.path_input = QLineEdit()
-        self.path_button = QPushButton("Browse...")
+        self.path_button = QPushButton("浏览...")
         self.path_button.clicked.connect(self.select_path)
-        self.path_layout.addWidget(self.path_input)
-        self.path_layout.addWidget(self.path_button)
+        path_layout.addWidget(self.path_input)
+        path_layout.addWidget(self.path_button)
+        form_layout.addLayout(path_layout)
         
-        path_layout.addLayout(self.path_layout)
-        path_group.setLayout(path_layout)
+        # 脚本位置显示
+        form_layout.addWidget(QLabel(f"脚本位置: {self.script_dir}"))
         
-        # Progress and Log
-        progress_group = QGroupBox("Progress")
-        progress_layout = QVBoxLayout()
-        
+        # 进度条
         self.progress_bar = QProgressBar()
+        form_layout.addWidget(self.progress_bar)
+        
+        # 日志区域
+        form_layout.addWidget(QLabel("操作日志:"))
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
+        form_layout.addWidget(self.log_output)
         
-        progress_layout.addWidget(self.progress_bar)
-        progress_layout.addWidget(QLabel("Operation Log:"))
-        progress_layout.addWidget(self.log_output)
-        progress_group.setLayout(progress_layout)
-        
-        # Execute Button
-        self.execute_button = QPushButton("Execute")
+        # 执行按钮
+        self.execute_button = QPushButton("执行")
         self.execute_button.clicked.connect(self.execute)
+        self.execute_button.setMinimumHeight(40)
+        form_layout.addWidget(self.execute_button)
         
-        # Assemble UI
-        self.main_layout.addWidget(mode_group)
-        self.main_layout.addWidget(method_group)
-        self.main_layout.addWidget(self.version_group)
-        self.main_layout.addWidget(path_group)
-        self.main_layout.addWidget(progress_group)
-        self.main_layout.addWidget(self.execute_button)
+        # 添加到主布局
+        self.main_layout.addLayout(form_layout)
         
         self.worker = None
+        self.update_mode(0)  # 初始化模式
 
     def update_mode(self, index):
         modes = ["install", "install_vs", "install_noconsole", "uninstall_console", "uninstall_all"]
         self.params["mode"] = modes[index]
         
-        # Show/hide version selection based on mode
-        if index in [0, 1, 2]:
-            self.version_group.show()
-        else:
-            self.version_group.hide()
+        # 只在安装模式下显示版本选择
+        if index < 3:  # 安装模式
+            for i in range(self.version_layout.count()):
+                widget = self.version_layout.itemAt(i).widget()
+                if widget:
+                    widget.setVisible(True)
+        else:  # 卸载模式
+            for i in range(self.version_layout.count()):
+                widget = self.version_layout.itemAt(i).widget()
+                if widget:
+                    widget.setVisible(False)
 
     def select_path(self):
         if self.batch_radio.isChecked():
-            folder = QFileDialog.getExistingDirectory(self, "Select Maps Folder")
+            folder = QFileDialog.getExistingDirectory(self, "选择地图文件夹")
             if folder:
                 self.path_input.setText(folder)
                 self.params["path"] = folder
         else:
             file, _ = QFileDialog.getOpenFileName(
-                self, "Select Map File", "", "Warcraft III Maps (*.w3x *.w3m)"
+                self, "选择地图文件", "", "魔兽地图文件 (*.w3x *.w3m)"
             )
             if file:
                 self.path_input.setText(file)
                 self.params["path"] = file
 
     def validate(self):
-        # Check if path is valid
+        # 检查路径是否有效
         if not self.params["path"]:
-            QMessageBox.warning(self, "Invalid Path", "Please select a valid map or folder path.")
+            QMessageBox.warning(self, "路径无效", "请选择有效的地图文件或文件夹路径")
             return False
         
         if self.batch_radio.isChecked():
             if not os.path.isdir(self.params["path"]):
-                QMessageBox.warning(self, "Invalid Folder", "Please select a valid folder for batch processing.")
-                return False
-            if not any(Path(self.params["path"]).glob(pattern) for pattern in ["*.w3x", "*.w3m"]):
-                QMessageBox.warning(self, "No Maps Found", "No Warcraft maps found in the selected folder.")
+                QMessageBox.warning(self, "文件夹无效", "批量处理需要选择有效的文件夹")
                 return False
         else:
             if not os.path.isfile(self.params["path"]):
-                QMessageBox.warning(self, "Invalid File", "Please select a valid map file.")
+                QMessageBox.warning(self, "文件无效", "请选择有效的地图文件")
                 return False
             if not self.params["path"].lower().endswith(('.w3x', '.w3m')):
-                QMessageBox.warning(self, "Invalid Map File", "Selected file is not a Warcraft III map (.w3x or .w3m).")
+                QMessageBox.warning(self, "文件类型错误", "所选文件不是魔兽地图文件 (.w3x 或 .w3m)")
                 return False
         
-        # Handle version
-        version_map = [
-            "REFORGED",
-            "TFT",
-            "ROC"
-        ]
-        self.params["version"] = version_map[self.version_combo.currentIndex()]
+        # 处理方式
         self.params["process_method"] = "batch" if self.batch_radio.isChecked() else "single"
+        
+        # 安装模式下需要版本
+        if self.params["mode"] in ["install", "install_vs", "install_noconsole"]:
+            version_map = ["REFORGED", "TFT", "ROC"]
+            self.params["version"] = version_map[self.version_combo.currentIndex()]
         
         return True
 
@@ -253,20 +288,19 @@ class AMAIInstaller(QMainWindow):
             return
             
         if self.worker and self.worker.isRunning():
-            QMessageBox.warning(self, "Operation in Progress", "An operation is already in progress.")
+            QMessageBox.warning(self, "操作进行中", "当前已有操作在执行中，请等待完成")
             return
             
-        # Clear logs and reset progress
+        # 重置界面
         self.progress_bar.reset()
         self.log_output.clear()
-        self.log_output.append("Starting operation...")
-        
-        # Disable UI during operation
+        self.log_output.append("开始操作...")
         self.set_ui_enabled(False)
         
-        # Create and start worker thread
-        self.worker = CommandWorker(self.params)
+        # 创建工作线程
+        self.worker = CommandWorker(self.params, self.script_dir)
         self.worker.progress.connect(self.update_progress)
+        self.worker.log_message.connect(self.add_log_message)
         self.worker.finished.connect(self.operation_finished)
         self.worker.start()
 
@@ -274,15 +308,17 @@ class AMAIInstaller(QMainWindow):
         self.progress_bar.setValue(value)
         self.log_output.append(message)
 
+    def add_log_message(self, message):
+        self.log_output.append(message)
+
     def operation_finished(self, success, message):
         self.log_output.append(message)
-        self.progress_bar.setValue(100)
         self.set_ui_enabled(True)
         
         if success:
-            QMessageBox.information(self, "Success", "Operation completed successfully!")
+            QMessageBox.information(self, "操作成功", "操作已成功完成")
         else:
-            QMessageBox.critical(self, "Error", "Operation failed!\n" + message)
+            QMessageBox.critical(self, "操作失败", f"操作遇到错误:\n{message}")
 
     def set_ui_enabled(self, enabled):
         self.mode_combo.setEnabled(enabled)
@@ -293,8 +329,26 @@ class AMAIInstaller(QMainWindow):
         self.path_button.setEnabled(enabled)
         self.execute_button.setEnabled(enabled)
 
+def get_script_directory():
+    """获取脚本目录（与主程序相同）"""
+    # 如果程序被打包成单文件，使用可执行文件所在目录
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    # 否则使用脚本文件所在目录
+    return os.path.dirname(os.path.abspath(__file__))
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = AMAIInstaller()
+    
+    # 使用简洁风格
+    app.setStyle("Fusion")
+    
+    # 获取脚本目录（与主程序相同）
+    script_dir = get_script_directory()
+    
+    # 创建并显示窗口
+    window = AMAIInstaller(script_dir)
     window.show()
+    
+    # 主循环
     sys.exit(app.exec_())
