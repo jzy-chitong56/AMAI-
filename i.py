@@ -110,11 +110,11 @@ class AMAIInstaller(QMainWindow):
         
         self.mode_combo = QComboBox()
         self.mode_combo.addItems([
-            "Install AMAI (Standard Console)",
-            "Install AMAI (VS Blizzard AI Console)",
-            "Install AMAI (No Console)",
-            "Remove AMAI Console",
-            "Uninstall AMAI and Console"
+            "安装 AMAI (标准控制台)",
+            "安装 AMAI (VS 第三方 AI 控制台)",
+            "安装 AMAI (不含控制台)",
+            "移除 AMAI 控制台",
+            "卸载 AMAI 和 控制台"
         ])
         self.mode_combo.currentIndexChanged.connect(self.update_mode)
         mode_layout.addWidget(QLabel("Select Operation Mode:"))
@@ -138,16 +138,16 @@ class AMAIInstaller(QMainWindow):
         method_group.setLayout(method_layout)
         
         # Version Selection
-        self.version_group = QGroupBox("Warcraft III Version")
+        self.version_group = QGroupBox("Warcraft III 版本")
         version_layout = QVBoxLayout()
         
         self.version_combo = QComboBox()
         self.version_combo.addItems([
-            "Reforged Edition (1.33+)",
+            "Reforged (2.03+)",
             "Classic: The Frozen Throne (1.24e+)",
             "Classic: Reign of Chaos (1.24e-1.31)"
         ])
-        version_layout.addWidget(QLabel("Select Warcraft III Version:"))
+        version_layout.addWidget(QLabel("选择 Warcraft III 版本:"))
         version_layout.addWidget(self.version_combo)
         self.version_group.setLayout(version_layout)
         
